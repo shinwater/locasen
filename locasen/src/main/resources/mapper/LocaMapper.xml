@@ -1,0 +1,271 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="mapper.LocaMapper">
+
+	<!-- 위치목록 조회 (트리 알맹이)-->
+	<select id="selectLocaTreeItem" resultType="com.dgrm.domain.LocaVO">
+	  SELECT 
+			LOCA_CD
+			,UP_LOCA_CD
+			,LOCA_NM
+		FROM TN_TE_CLILOCA
+		WHERE 1 = 1
+		ORDER BY LOCA_SORT
+	</select>
+	
+	
+	<!-- 선택한 위치에 따른 센서목록 조회 (그리드 알맹이) -->
+	<select id="selectLocaGridItem" resultType="com.dgrm.domain.SensorVO" parameterType="String">
+		SELECT 
+			A.LOCA_CD
+			,A.LOCA_NM
+			,B.SENSOR_CD
+			,B.SENSOR_NM
+			,B.SENSOR_TYPE 
+			,B.ALARM_IMPTANCE 
+			,B.ALARM_YN 
+			,SUBSTR(B.FNL_MDFC_DTM,0,8) AS FNL_MDFC_DTM 
+			,NVL2(B.SENSOR_COORD, '( '|| B.SENSOR_COORD ||' )', '') AS SENSOR_COORD
+			,B.SENSOR_ONOFF
+			--,SUBSTR(SENSOR_COORD, 0, INSTR(SENSOR_COORD,',')-1) AS X,SUBSTR(SENSOR_COORD, INSTR(SENSOR_COORD,',')+1) AS Y
+		FROM (SELECT LOCA_CD
+					,LOCA_NM
+					,UP_LOCA_CD
+				FROM TN_TE_CLILOCA 
+				<if test='value neq ""'>
+					START WITH LOCA_CD = #{value}
+					CONNECT BY PRIOR LOCA_CD = UP_LOCA_CD 
+				</if>
+			) A
+			,TN_TE_SENSOR_RGST B
+		WHERE A.LOCA_CD = B.SUB_LOCA_CD
+	</select>
+	<!-- TO_DATE(SUBSTR(B.FNL_MDFC_DTM,0,8),'YYYYMMDD') AS FNL_MDFC_DTM :이건 date 타입일떄 -->
+	
+	<!-- 위치-센서 현황 조회 (차트 알맹이)-->
+	<select id="selectLocaSensorStat" resultType="com.dgrm.domain.LocaVO">
+		SELECT A.LOCA_CD	
+				,A.CLIENT_NM ||'>'||A.LOCA_NM AS LOCA_NM
+				,SUM(SENSOR_CNT) AS SENSOR_CNT
+		FROM
+			(-- 건물명에 해당하는 회사코드와 하위장소코드 
+			SELECT D.LOCA_CD AS CLIENT	 		-- 회사코드
+					,D.LOCA_NM AS CLIENT_NM
+					,C.LOCA_CD	-- 위치코드
+					,C.LOCA_NM	-- 위치 명
+					,C.LOCA_CD||','||B.LOCA_CD||','||A.LOCA_CD AS LOCA_CD_LIST
+			FROM (SELECT * FROM TN_TE_CLILOCA WHERE LOCA_LVL ='3') A
+				,(SELECT * FROM TN_TE_CLILOCA WHERE LOCA_LVL ='2') B
+				,(SELECT * FROM TN_TE_CLILOCA WHERE LOCA_LVL ='1') C
+				,(SELECT * FROM TN_TE_CLILOCA WHERE LOCA_LVL ='0') D
+			WHERE A.UP_LOCA_CD (+)= B.LOCA_CD
+				AND B.UP_LOCA_CD (+)= C.LOCA_CD
+				AND C.UP_LOCA_CD (+)= D.LOCA_CD
+			) A
+			,(-- 위치와 센서갯수 연결 
+			SELECT COUNT(*) AS SENSOR_CNT	-- 위치에 따른 센서의 개수
+					,SUB_LOCA_CD			-- 센서가 있는 위치코드
+					,LOCA_CD				-- 회사코드
+				FROM TN_TE_SENSOR_RGST
+				GROUP BY SUB_LOCA_CD,LOCA_CD
+			) B
+		WHERE A.LOCA_CD_LIST LIKE '%'||SUB_LOCA_CD||'%'
+			AND A.CLIENT = B.LOCA_CD
+		GROUP BY A.LOCA_CD, A.LOCA_NM, A.CLIENT_NM
+	</select>
+	
+	<!-- 위치-센서리스트 조회 (차트 밑에 있는 그리드)-->
+	<select id="selectLocaSensorList" resultType="com.dgrm.domain.SensorVO">
+		SELECT A.LOCA_CD
+				,A.LOCA_NM
+				,B.SENSOR_CD
+				,B.SENSOR_NM
+		FROM ( SELECT LOCA_CD
+					,LOCA_NM
+				FROM TN_TE_CLILOCA
+				START WITH LOCA_CD = #{LOCA_CD}
+				CONNECT BY PRIOR LOCA_CD = UP_LOCA_CD 
+			) A -- 해당 건물의 하위 위치들
+			,( SELECT SUB_LOCA_CD 
+						,SENSOR_CD 
+						,SENSOR_NM 
+				FROM TN_TE_SENSOR_RGST
+			) B -- 센서
+		WHERE A.LOCA_CD = B.SUB_LOCA_CD
+		ORDER BY LOCA_CD 
+	</select>
+	
+	<!-- 센서정보 조회 (오픈레이어즈)-->
+	<select id="selectSensorInfo" resultType="com.dgrm.domain.SensorVO">
+		SELECT A.LOCA_CD 
+				,A.LOCA_NM
+				,A.LOCA_ADDR
+				,B.SENSOR_CD 
+				,B.SENSOR_NM 
+				,B.SENSOR_COORD 
+			FROM TN_TE_CLILOCA A
+				,TN_TE_SENSOR_RGST B
+			WHERE A.LOCA_CD = B.SUB_LOCA_CD 
+				AND B.SENSOR_CD(+) = #{SENSOR_CD}
+	</select>
+	
+	<!-- 센서좌표 수정 -->
+	<update id="updateSensorCoord" parameterType="com.dgrm.domain.SensorVO">
+		UPDATE TN_TE_SENSOR_RGST
+		   SET SENSOR_COORD = #{sensor_coord}
+		 WHERE SENSOR_CD = #{sensor_cd}
+	</update>
+	
+	<!-- 위치 정보 수정창 -->
+	<select id="selectLocaInfo" resultType="com.dgrm.domain.LocaVO">
+		SELECT LOCA_CD
+			  ,LOCA_NM
+			  ,LOCA_SORT 
+			  ,USE_YN 
+		  FROM TN_TE_CLILOCA 
+		 WHERE LOCA_CD = #{LOCA_CD}
+	</select>
+	
+	<!-- 위치정보 수정 -->
+	<update id="updateLocaInfo" parameterType="com.dgrm.domain.LocaVO">
+		UPDATE TN_TE_CLILOCA 
+		SET LOCA_NM = #{loca_nm}
+			, LOCA_SORT = #{loca_sort}
+			, USE_YN = #{use_yn}
+			, FNL_MDFC_DTM = TO_CHAR(SYSDATE,'YYYYMMDD')
+		WHERE LOCA_CD = #{loca_cd}
+	</update>
+	
+	<!-- 위치정보 추가 -->
+	<insert id="insertLocaInfo" parameterType="com.dgrm.domain.LocaVO">
+		INSERT 
+			INTO TN_TE_CLILOCA (
+				LOCA_CD
+				, LOCA_NM
+				, UP_LOCA_CD 
+				, LOCA_SORT
+				, LOCA_LVL
+				, FNL_MDFC_DTM
+			)
+			SELECT 
+				TO_CHAR(SYSDATE ,'YYMMDD') || '-' || SUBSTR(LOCA_CD,0,INSTR(LOCA_CD,'-')-1)|| '-' ||(B.CNT)
+				, #{loca_nm}
+				, A.LOCA_CD 
+				, ''
+				, TO_NUMBER(A.LOCA_LVL,'999')+1 
+				, TO_CHAR(SYSDATE,'YYYYMMDD')
+			FROM TN_TE_CLILOCA A
+				,( SELECT LPAD((MAX(TO_NUMBER(SUBSTR(LOCA_CD,INSTR(LOCA_CD,'-',-1)+1),'999'))+1),3,0) AS CNT FROM TN_TE_CLILOCA ) B
+			WHERE A.LOCA_CD = #{up_loca_cd}
+	</insert>
+	
+	<!-- 위치정보 삭제 -->
+	<delete id="deleteLocaInfo" parameterType="String">
+		DELETE FROM TN_TE_CLILOCA
+			WHERE LOCA_CD IN (SELECT LOCA_CD
+								FROM TN_TE_CLILOCA
+								START WITH LOCA_CD = #{LOCA_CD}
+								CONNECT BY PRIOR LOCA_CD = UP_LOCA_CD)
+	</delete>
+	
+	<!-- 센서 정보 업데이트 (안씀)-->
+	<insert id="mergeSensorInfo" parameterType="hashmap">
+		MERGE INTO TN_ED_SUBJMGT
+		    USING DUAL
+			   ON (SENSOR_CD = ${SENSOR_CD})
+			 WHEN MATCHED THEN
+				  UPDATE 
+				   	 SET SENSOR_COORD = #{SENSOR_COORD}
+						,SENSOR_ACT_YN = #{SENSOR_ACT_YN}
+						,ALARM_IMPTANCE = #{ALARM_IMPTANCE}
+						,ALARM_YN = #{ALARM_YN}
+						,SENSOR_ONOFF = #{SENSOR_ONOFF}
+						,LOCA_CD = #{LOCA_CD}
+						,LOCA_NM = #{LOCA_NM}
+						,SUB_LOCA_CD = #{SUB_LOCA_CD}
+						,SENSOR_NM = #{SENSOR_NM}
+						,SENSOR_TYPE = #{SENSOR_TYPE}
+						,FNL_MDFC_DTM = #{FNL_MDFC_DTM}
+						,SENSOR_CD = #{SENSOR_CD}
+			 WHEN NOT MATCHED THEN
+			      INSERT ( 
+						SENSOR_COORD
+						,SENSOR_ACT_YN
+						,ALARM_IMPTANCE
+						,ALARM_YN
+						,SENSOR_ONOFF
+						,LOCA_CD
+						,LOCA_NM
+						,SUB_LOCA_CD
+						,SENSOR_NM
+						,SENSOR_TYPE
+						,FNL_MDFC_DTM
+						,SENSOR_CD )
+			      VALUES (
+			      		#{SENSOR_COORD}
+						,#{SENSOR_ACT_YN}
+						,#{ALARM_IMPTANCE}
+						,#{ALARM_YN}
+						,#{SENSOR_ONOFF}
+						,#{LOCA_CD}
+						,#{LOCA_NM}
+						,#{SUB_LOCA_CD}
+						,#{SENSOR_NM}
+						,#{SENSOR_TYPE}
+						,#{FNL_MDFC_DTM}
+						,#{SENSOR_CD})
+	</insert>
+	
+	<select id="selectSensorCd" parameterType="HashMap" resultType="com.dgrm.domain.SensorVO">
+		SELECT LOCA_CD 
+				,LOCA_NM AS LOCA_NM 
+				,SUBSTR(#{sensor_cd},0,INSTR(#{sensor_cd} , '-', -1)) || LPAD(TO_NUMBER(SUBSTR(#{sensor_cd}, -3, 3) ,999) + 1, 3, '0') AS SENSOR_CD
+				,TO_CHAR(SYSDATE,'YYYYMMDD') AS FNL_MDFC_DTM
+			FROM TN_TE_CLILOCA 
+			WHERE LOCA_CD = #{loca_cd}
+	</select>
+	
+	<!-- 센서정보 삭제 -->
+	<delete id="deleteSensorInfo" parameterType="String">
+		DELETE FROM TN_TE_SENSOR_RGST
+		WHERE SENSOR_CD = #{SENSOR_CD}
+	</delete>
+	
+	<!-- 센서 등록 -->
+	<insert id="insertSensorList" parameterType="Object">
+		INSERT INTO TN_TE_SENSOR_RGST
+				( SENSOR_COORD
+				,ALARM_IMPTANCE
+				,LOCA_CD
+				,LOCA_NM
+				,SUB_LOCA_CD
+				,SENSOR_NM
+				,SENSOR_TYPE
+				,FNL_MDFC_DTM
+				,SENSOR_CD )
+	      SELECT 
+	      		#{SENSOR_COORD}
+				,#{ALARM_IMPTANCE}
+				,'BIGHIT1-000'
+				,'빅히트엔터테인먼트'
+				,#{LOCA_CD}
+				,#{SENSOR_NM}
+				,#{SENSOR_TYPE}
+				,REPLACE (SUBSTR(#{FNL_MDFC_DTM},0,10),'-','')
+				,#{SENSOR_CD}
+			FROM TN_TE_CLILOCA
+			WHERE LOCA_CD= #{LOCA_CD}
+	</insert>
+	
+	<!-- 센서 수정 -->
+	<update id="updateSensorList" parameterType="Object">
+		UPDATE TN_TE_SENSOR_RGST
+		   	 SET ALARM_IMPTANCE = #{ALARM_IMPTANCE}
+				,SUB_LOCA_CD = #{LOCA_CD}
+				,SENSOR_NM = #{SENSOR_NM}
+				,SENSOR_TYPE = #{SENSOR_TYPE}
+				,FNL_MDFC_DTM = REPLACE (SUBSTR(#{FNL_MDFC_DTM},0,10),'-','')
+			WHERE SENSOR_CD = #{SENSOR_CD}
+	</update>
+</mapper>
